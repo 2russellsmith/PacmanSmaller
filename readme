@@ -1,0 +1,42 @@
+Repositories
+Go to src clone the following repositories
+https://github.com/dqyi11/sphero_ros.git
+https://github.com/dqyi11/multi_apriltags_tracker.git
+
+https://github.com/darin-costello/sphero_swarm_line_demo.git
+
+To change spheros edit
+catkin_ws/src/sphero_ros/sphero_swarm_bringup/launch/param/swarm.yaml
+Then run:
+
+to connect all spheros
+roslaunch sphero_swarm_bringup sphero_swarm.launch
+
+To open DashBoard (change colors and rotate)
+roslaunch sphero_swarm_dashboard sphero_swarm_dashboard.launch
+
+To add or remove spheros to swarm while running
+roslaunch sphero_swarm_node sphero_swarm_manager.launch
+
+To Luanch the camera services
+roslaunch multi_apriltags_tracker launch_multi_april_tags_tracker.launch
+
+To Print out april tag locations to terminal
+rostopic echo /april_tag_pos
+
+to print out sphero velocities to the terminal
+rostopic echo /april_tag_pos
+
+To open keyboard operation of spheros
+roslaunch sphero_swarm_teleop keyboard_teop.launch
+
+To run example where spheros move randomly run
+rosrun sphero_swarm_teleop sphero_swarm_random_move.py
+
+
+to run Line demo: doesn't work terribly well, but code will show how to use a swarms
+rosrun sphero_swarm_line_demo spher_swarm_line_gui.py
+
+
+ubuntu edit video options
+qv4l2
