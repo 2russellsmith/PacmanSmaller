@@ -115,7 +115,7 @@ class RRTController:
         print str(self.ending_location)
 
         self.find_path()
-	self.stop = False
+    	self.stop = False
 
         self.cmdVelPub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
         self.trackposSub = rospy.Subscriber("tracked_pos", Pose2D, self.trackposCallback)

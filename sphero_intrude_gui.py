@@ -1,39 +1,14 @@
 #!/usr/bin/python
 
-import sys, rospy, math, random
+import sys, rospy, math, cv2
 from PyQt4 import QtGui, QtCore
-from geometry_msgs.msg import Twist, Pose2D
-from std_msgs.msg import ColorRGBA, Float32, Bool
-from apriltags_intrude_detector.srv import apriltags_intrude
-from apriltags_intrude_detector.srv import apriltags_info
+from sphero_swarm_node.msg import SpheroTwist, SpheroColor
+from multi_apriltags_tracker.msg import april_tag_pos
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge, CvBridgeError
+from PacmanController import PacmanController
 
-from Lab1.defaultController import defaultController
-from Lab2.RRTController import RRTController
-from Lab2.AController import AController 
-
-class SpheroIntrudeForm(QtGui.QWidget):
-    
-    def __init__(self):
-        super(QtGui.QWidget, self).__init__()
-        self.resize(600, 480) 
-        self.initUI()
-
-        rospy.init_node('sphero_intrude', anonymous=True)
-        self.cmdVelPub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
-        self.cmdVelSub = rospy.Subscriber("cmd_vel", Twist, self.cmdVelCallback) 
-
-        self.trackposSub = rospy.Subscriber("tracked_pos", Pose2D, self.trackposCallback) 
-        self.controller = None
-
-       
-    def initUI(self):
-
-        self.stateLabel = QtGui.QLabel("Position")
-        self.stateTextbox = QtGui.QTextEdit()
-        self.stateTextbox.setReadOnly(True)
-        self.connect(self, QtCore.SIGNAL("sendPosIDText(PyQt_PyObject)"), self.updateStateTextbot)     
-        
-        key_instruct_label = """
+key_instruct_label = """
     Control Your Sphero!
     ---------------------------
     Moving around:
@@ -41,185 +16,291 @@ class SpheroIntrudeForm(QtGui.QWidget):
        j    k    l
        m    ,    .
     """
+
+BOARD_WIDTH = 19
+BOARD_HEIGHT = 9
+
+CAMERA_WIDTH = 800
+CAMERA_HEIGHT = 600
+
+CELL_WIDTH = CAMERA_WIDTH / BOARD_WIDTH
+CELL_HEIGHT = CAMERA_HEIGHT / CAMERA_HEIGHT
+
+
+def toDiscretized(location):
+    x = int(location[0] / CELL_WIDTH)
+    y = int(location[1] / CELL_HEIGHT)
+    return x, y
+
+
+def fromDiscretized(location):
+    x = (location[0] + .5) * CELL_WIDTH
+    y = (location[1] + .5) * CELL_HEIGHT
+    return int(x), int(y)
+
+
+class PacmanGui(QtGui.QWidget):
+    def __init__(self):
+        super(QtGui.QWidget, self).__init__()
+        self.resize(600, 480)
+
+        self.stopFlag = True
+        self.controller = None
+
+        self.sphero_dict = rospy.get_param('/sphero_swarm/connected')
+
+        #############
+        # LISTENERS #
+        #############
+
+        # self.cmdVelPub is who we tell about to move sphero
+        self.cmdVelPub = rospy.Publisher('cmd_vel', SpheroTwist, queue_size=1)
+
+        # How to get camera feed, draw on it and publish it to a feed that the camera program can display
+        self.bridge = CvBridge()
+        self.subscriber = rospy.Subscriber("/camera/image_raw", Image, self.cameraImageCallback, queue_size=1)
+        self.publisher = rospy.Publisher("/output/image_raw", Image, queue_size=1)
+
+        # who we tell if we want to update the color
+        self.colorPub = rospy.Publisher('set_color', SpheroColor, queue_size=1)
+
+        # aprtSub tells us when april tags are updated. When this happens the callback function is called.
+        self.aprtSub = rospy.Subscriber('april_tag_pos', april_tag_pos, self.aprtCallback)
+
+        ################
+        # GUI ELEMENTS #
+        ################
+
         self.keyInstructLabel = QtGui.QLabel(key_instruct_label)
-        self.cmdVelLabel = QtGui.QLabel("cmd_vel")
-        self.cmdVelTextbox = QtGui.QTextEdit()
-        self.cmdVelTextbox.setReadOnly(True)  
-        self.connect(self, QtCore.SIGNAL("sendCmdVelText(PyQt_PyObject)"), self.updateCmdVelTextbox)
 
-        self.aprilTagsInfoLabel = QtGui.QLabel("april tags info")
-        self.aprilTagsInfoBtn = QtGui.QPushButton("Query")
-        self.aprilTagsInfoBtn.clicked.connect(self.queryAprilTagsInfo)
-        self.aprilTagsTextbox = QtGui.QTextEdit()
-        self.aprilTagsTextbox.setReadOnly(True)
-        self.connect(self, QtCore.SIGNAL("sendTagInfoText(PyQt_PyObject)"), self.updateAprilTagsTextbot)
+        self.controllerDropDown = QtGui.QComboBox()
 
-        self.aprilTagDropDown = QtGui.QComboBox()
+        # Add your methods here
+        self.controllerDropDown.addItem("Zeta Pacman")
 
-	# Add your methods here
-	self.aprilTagDropDown.addItem("Default")
-	self.aprilTagDropDown.addItem("Waypoints")
-	self.aprilTagDropDown.addItem("A*")
-        self.aprilTagDropDown.addItem("RRT")
+        self.controllerStartBtn = QtGui.QPushButton("Start")
+        self.controllerStartBtn.clicked.connect(self.start)
 
-        self.aprilTagsStartBtn = QtGui.QPushButton("Start")
-	self.aprilTagsStartBtn.clicked.connect(self.start)
+        self.controllerStopBtn = QtGui.QPushButton("Stop")
+        self.controllerStopBtn.clicked.connect(self.stop)
 
-
-        self.aprilTagsStopBtn = QtGui.QPushButton("Stop")
-        self.aprilTagsStopBtn.clicked.connect(self.stop)
-
-
-        self.layout =  QtGui.QVBoxLayout()
-        self.layout.addWidget(self.stateLabel)
-        self.layout.addWidget(self.stateTextbox)
-        self.layout.addWidget(self.keyInstructLabel)
-        self.layout.addWidget(self.cmdVelLabel)
-        self.layout.addWidget(self.cmdVelTextbox)
+        self.layout = QtGui.QVBoxLayout()
         hlayout = QtGui.QHBoxLayout()
-        hlayout.addWidget(self.aprilTagsInfoLabel)
-        hlayout.addWidget(self.aprilTagsInfoBtn)
-        hlayout.addWidget(self.aprilTagDropDown)
-        hlayout.addWidget(self.aprilTagsStartBtn)
-        hlayout.addWidget(self.aprilTagsStopBtn)
-        self.layout.addLayout(hlayout)
-        self.layout.addWidget(self.aprilTagsTextbox)
-        self.setLayout(self.layout)
+        hlayout.addWidget(self.controllerDropDown)
+        hlayout.addWidget(self.controllerStartBtn)
+        hlayout.addWidget(self.controllerStopBtn)
 
-        self.setWindowTitle("Sphero Intrude")
+        self.layout.addLayout(hlayout)
+        self.setLayout(self.layout)
+        self.setWindowTitle("AI Pacman")
         self.show()
 
+        rospy.init_node('Pacman AI', anonymous=True)
+
     def start(self):
+        currentMethod = self.aprilTagDropDown.currentText()
 
-	currentMethod = self.aprilTagDropDown.currentText()
+        if self.controller:
+            self.stop()
 
-	if self.controller:
-		self.stop()
+        # Add an if statement for each item in the drop down to create your controller for that method
+        if currentMethod == "Zeta Pacman":
+            print "Zeta Pacman"
+            self.controller = PacmanController()
 
-	# Add an if statement for each item in the drop down to create your controller for that method
-	if currentMethod == "Default":
-                print "DEFAULT"
-		self.controller = defaultController()
-	elif currentMethod == "Waypoints":
-                print "WAYPOINTS"
-		self.controller = defaultController()
-	elif currentMethod == "A*":
-                print "A*"
-		self.controller = AController()
-        elif currentMethod == "RRT":
-                self.controller = RRTController()
-
-
-
-	if self.controller:
+        if self.controller:
             self.controller.startExecution()
 
     def stop(self):
-        
         if self.controller:
             self.controller.stopExecution()
 
+    def cameraImageCallback(self, ros_data):
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(ros_data, "bgr8")
+
+            self.drawOverlay(cv_image)
+
+            self.publisher.publish(self.bridge.cv2_to_imgmsg(cv_image, "bgr8"))
+        except CvBridgeError as e:
+            print(e)
+
+    def drawOverlay(self, image):
+
+        # draw the grid
+        controllerData = self.controller.getGUIData()
+
+        # constants for variable drawing
+        color = (0, 0, 255)
+        thickness = 1
+        lineType = 8
+        shift = 0
+        radius = 5
+        for i in range(0, BOARD_HEIGHT):
+            for j in range(0, BOARD_WIDTH):
+                # draw boxes
+                topLeftCorner = (CELL_WIDTH * i, CELL_HEIGHT * j)
+                bottomRightCorner = (CELL_WIDTH * (i + 1), CELL_HEIGHT * (j + 1))
+                cv2.rectangle(image, topLeftCorner, bottomRightCorner, color, thickness, lineType, shift)
+
+                # draw pellets
+                if (i, j) in controllerData['pellet_locations']:
+                    cv2.circle(image, fromDiscretized((i, j)), radius, color, thickness, lineType, shift)
+                    # http://docs.opencv.org/2.4/modules/core/doc/drawing_functions.html
+
+    # main body of algorithm should go here. MSG contains an id, x,y and orientation data members
+    def aprtCallback(self, msg):
+        print('april tag call back' + str(msg))
+
+        # still loading
+        if not self.stopFlag or self.controller is None:
+            return
+
+        # update the controller with the new tag locations
+        discretizedLocations = [toDiscretized(x) for x in msg.pose]
+        tagLocations = {x[0]: x[1] for x in list(zip(msg.ids, discretizedLocations))}
+        self.controller.updateAgents(tagLocations)
+        # for location, id in list(zip(msg.pose, msg.id)):
+        #     tagLocations
+        #
+        # for location in self.location:
+        #     self.location[location] = (-1, -1)
+        #
+        # # iterate through array of april-tag ids
+        # for i in range(0, len(msg.id)):
+        #     self.location[msg.id[i]] = (msg.pose[i].x, msg.pose[i].y)
+
+        minX = -1
+        minY = -1
+        maxX = -1
+        maxY = -1
+
+        for spheroId in msg.id:
+            agent = self.getAgent(spheroId)
+            if agent is not None:
+                agent.setLocation(self.toDiscretized(self.location[spheroId]))
+
+                toHere = self.location[spheroId]
+                if toHere[0] == -1:
+                    continue
+                nextIndex = self.order.index(spheroId) + 1
+                if nextIndex >= len(self.order):
+                    continue
+                nextSphero = self.order[nextIndex]
+                fromHere = self.location[nextSphero]
+                if fromHere[0] == -1:
+                    continue
+                twist = self.getTwistFromDirection(agent.getMove(self.gameState))
+
+                twist.name = self.numToSphero[nextSphero]
+                self.cmdVelPub.publish(twist)  # how to tell sphero to move. all fields in twist must be explicitly set.
+            else:
+                location = self.location[spheroId]
+                if minX == -1:
+                    minX = location[0]
+                    minY = location[1]
+                    maxX = location[0]
+                    maxY = location[1]
+                if (location[0] < minX):
+                    minX = location[0]
+                if (location[1] < minY):
+                    minY = location[1]
+                if (location[0] > maxX):
+                    maxX = location[0]
+                if (location[1] < maxY):
+                    maxY = location[1]
+
+        # calculate the height and width of the board according to tag corner positions
+        BOARD_WIDTH = maxX - minX
+        BOARD_HEIGHT = maxY - minY
+        # calculate the height and width of the boxes to be drawn
+        BOX_WIDTH = BOARD_WIDTH / BOX_X_COUNT
+        BOX_HEIGHT = BOARD_HEIGHT / BOX_Y_COUNT
+
+
+    # TODO Can be used to manually drive pacman
     # These can be changed
     # http://doc.qt.io/qt-5/qt.html#Key-enum
-    def keyPressEvent(self, e): 
-        twist = None       
+    def keyPressEvent(self, e):
+        twist = None
         if e.key() == QtCore.Qt.Key_U:
             twist = Twist()
-            twist.linear.x = -80; twist.linear.y = 80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = -80
+            twist.linear.y = 80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_I:
-            twist = Twist()  
-            twist.linear.x = 0; twist.linear.y = 80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0     
+            twist = Twist()
+            twist.linear.x = 0
+            twist.linear.y = 80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_O:
             twist = Twist()
-            twist.linear.x = 80; twist.linear.y = 80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = 80
+            twist.linear.y = 80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_J:
             twist = Twist()
-            twist.linear.x = -80; twist.linear.y = 0; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = -80
+            twist.linear.y = 0
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_K:
             twist = Twist()
-            twist.linear.x = 0; twist.linear.y = 0; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = 0
+            twist.linear.y = 0
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_L:
             twist = Twist()
-            twist.linear.x = 80; twist.linear.y = 0; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = 80
+            twist.linear.y = 0
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_M:
             twist = Twist()
-            twist.linear.x = -80; twist.linear.y = -80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = -80
+            twist.linear.y = -80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_Comma:
             twist = Twist()
-            twist.linear.x = 0; twist.linear.y = -80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            twist.linear.x = 0
+            twist.linear.y = -80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         elif e.key() == QtCore.Qt.Key_Period:
             twist = Twist()
-            twist.linear.x = 80; twist.linear.y = -80; twist.linear.z = 0
-            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0 
+            twist.linear.x = 80
+            twist.linear.y = -80
+            twist.linear.z = 0
+            twist.angular.x = 0
+            twist.angular.y = 0
+            twist.angular.z = 0
         if twist != None:
             self.cmdVelPub.publish(twist)
 
-    def cmdVelCallback(self, msg):
-        cmd_vel_text = "x=" + str(msg.linear.x) + " y=" + str(msg.linear.y)
-        self.emit(QtCore.SIGNAL("sendCmdVelText(PyQt_PyObject)"), cmd_vel_text) 
-
-    def updateCmdVelTextbox(self, value):
-        self.cmdVelTextbox.moveCursor(QtGui.QTextCursor.End)
-        self.cmdVelTextbox.ensureCursorVisible()
-        self.cmdVelTextbox.append(str(value))
-        self.cmdVelTextbox.update()
-
-    def trackposCallback(self, msg):
-        rospy.wait_for_service("apriltags_intrude")
-        try:
-            intrude_query = rospy.ServiceProxy("apriltags_intrude", apriltags_intrude)
-            resp = intrude_query(int(msg.x), int(msg.y))
-            pos_id_text = "["+str(int(msg.x))+"," +str(int(msg.y))+"]" + "(" + str(resp.id) + ")"
-            self.emit(QtCore.SIGNAL("sendPosIDText(PyQt_PyObject)"), pos_id_text)
-        except rospy.ServiceException, e:
-            print "Service call failed: %s"%e
-
-    def updateStateTextbot(self, value):
-        self.stateTextbox.moveCursor(QtGui.QTextCursor.End)
-        self.stateTextbox.ensureCursorVisible()
-        self.stateTextbox.append(str(value))
-        self.stateTextbox.update()
-
-    def queryAprilTagsInfo(self):
-        rospy.wait_for_service("apriltags_info")
-        try:
-            info_query = rospy.ServiceProxy("apriltags_info", apriltags_info)
-            resp = info_query()
-
-            info_text = "" 
-            for i in range(len(resp.polygons)):
-                poly = resp.polygons[i]
-                t_id = resp.ids[i]
-                info_text += "["+str(t_id)+"] "
-                for p in poly.points:
-                    info_text += "(" + str(int(p.x)) + "," + str(int(p.y)) + ")"
-                info_text += "\n" 
-
-            self.emit(QtCore.SIGNAL("sendTagInfoText(PyQt_PyObject)"), info_text)
-        except rospy.ServiceException, e:
-            print "Service call failed: %s"%e
-        
-    def updateAprilTagsTextbot(self, value):
-        self.aprilTagsTextbox.clear()
-        self.aprilTagsTextbox.moveCursor(QtGui.QTextCursor.End)
-        self.aprilTagsTextbox.ensureCursorVisible()
-        self.aprilTagsTextbox.append(str(value))
-        self.aprilTagsTextbox.update()        
-
 
 if __name__ == '__main__':
-
     app = QtGui.QApplication(sys.argv)
-    w = SpheroIntrudeForm()
-    w.show()
+    p = PacmanGui()
+    p.show()
     sys.exit(app.exec_())
-  
-        

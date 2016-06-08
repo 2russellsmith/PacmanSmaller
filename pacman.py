@@ -47,8 +47,8 @@ class SpheroSwarmLineForm(QtGui.QWidget):
 
         rospy.init_node('sphero_swarm_line_gui', anonymous=True)
 
-        self.cmdVelPub = rospy.Publisher('cmd_vel', SpheroTwist,
-                                         queue_size=1)  # self.cmdVelPub is who we tell about to move sphero
+        # self.cmdVelPub is who we tell about to move sphero
+        self.cmdVelPub = rospy.Publisher('cmd_vel', SpheroTwist, queue_size=1)
         self.cmdVelSub = rospy.Subscriber("cmd_vel", SpheroTwist, self.cmdVelCallback)
 
         # How to get camera feed, draw on it and publish it to a feed that the camera program can display
@@ -56,10 +56,11 @@ class SpheroSwarmLineForm(QtGui.QWidget):
         self.subscriber = rospy.Subscriber("/camera/image_raw", Image, self.cameraImageCallback, queue_size=1)
         self.publisher = rospy.Publisher("/output/image_raw", Image, queue_size=1)
 
-        self.colorPub = rospy.Publisher('set_color', SpheroColor,
-                                        queue_size=1)  # who we tell if we want to update the color
-        self.aprtSub = rospy.Subscriber('april_tag_pos', april_tag_pos, self.aprtCallback)
+        # who we tell if we want to update the color
+        self.colorPub = rospy.Publisher('set_color', SpheroColor, queue_size=1)
+
         # aprtSub tells us when april tags are updated. When this happens the callback function is called.
+        self.aprtSub = rospy.Subscriber('april_tag_pos', april_tag_pos, self.aprtCallback)
 
     def cameraImageCallback(self, ros_data):
         try:
